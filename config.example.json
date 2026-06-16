@@ -1,0 +1,18 @@
+{
+  "apktw": {
+    "username": "your_username",
+    "password": "your_password",
+    "2captcha_key": "your_2captcha_api_key"
+  },
+  "ptt": {
+    "username": "your_ptt_username",
+    "password": "your_ptt_password"
+  },
+  "notify": {
+    "telegram": {
+      "bot_token": "your_telegram_bot_token",
+      "chat_id": "your_telegram_chat_id"
+    }
+  },
+  "lang": "zh-tw"
+}

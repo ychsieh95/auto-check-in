@@ -1,0 +1,14 @@
+# captcha datasets
+captchas*/
+
+# claude
+.claude/
+
+# credentials & session
+.session_cookies.pkl
+config.json
+
+# python
+*.py[cod]
+.venv/
+__pycache__/
