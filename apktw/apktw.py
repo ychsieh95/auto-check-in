@@ -233,9 +233,17 @@ class ApkTw:
         return True
 
     def verify_login(self) -> bool:
-        """Check whether the current session is authenticated."""
+        """Check whether the current session is authenticated.
+
+        A stale/invalidated auth cookie doesn't redirect away from
+        home.php?mod=spacecp; the server just renders the same URL with a
+        "please login" prompt embedded in the page, so the URL alone can't
+        tell us apart from a real login. Check the page content instead.
+        """
         resp = self.session.get(f"{self.BASE_URL}/home.php?mod=spacecp", timeout=15)
-        return "login" not in resp.url and resp.status_code == 200
+        if "login" in resp.url or resp.status_code != 200:
+            return False
+        return "action=logout" in resp.text and "您需要先登錄" not in resp.text
 
     def get_info(self) -> dict:
         """Fetch the current user's group and credit info.
