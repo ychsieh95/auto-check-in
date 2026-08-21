@@ -6,12 +6,37 @@ PTT (批踢踢實業坊) via PyPtt.
 
 import json
 import logging
+from pathlib import Path
 
 from i18n import normalize_lang, t
-from pathlib import Path
-from PyPtt import PTT
+from PyPtt import PTT, screens
 
 log = logging.getLogger(__name__)
+
+
+# PTT changed the status line on its main menu in August 2026.  PyPtt 2.3.6
+# still looks for the old spacing/brackets, so it reaches the main menu and
+# then raises LoginError.  Keep this narrowly guarded so a future PyPtt parser
+# update is left untouched.
+_STALE_MAIN_MENU_TARGET = ["離開，再見", "人, 我是", "[呼叫器]"]
+_CURRENT_MAIN_MENU_TARGET = ["離開，再見", "人,我是", "呼叫器"]
+
+
+def _patch_pyptt_main_menu_target() -> None:
+    """Teach affected PyPtt releases to recognize PTT's current main menu."""
+    if screens.Target.MainMenu != _STALE_MAIN_MENU_TARGET:
+        return
+
+    screens.Target.MainMenu = _CURRENT_MAIN_MENU_TARGET.copy()
+
+    # CursorToGoodbye is copied from MainMenu when PyPtt is imported.  Preserve
+    # any cursor marker already appended by PyPtt while updating that prefix.
+    prefix_length = len(_STALE_MAIN_MENU_TARGET)
+    if screens.Target.CursorToGoodbye[:prefix_length] == _STALE_MAIN_MENU_TARGET:
+        screens.Target.CursorToGoodbye = (
+            _CURRENT_MAIN_MENU_TARGET.copy()
+            + screens.Target.CursorToGoodbye[prefix_length:]
+        )
 
 
 class PttCheckin:
@@ -21,6 +46,7 @@ class PttCheckin:
         self.username = username
         self.password = password
         self.lang = normalize_lang(lang)
+        _patch_pyptt_main_menu_target()
         self.bot = PTT.API()
 
     @classmethod
