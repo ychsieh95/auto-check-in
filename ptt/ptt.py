@@ -19,7 +19,10 @@ log = logging.getLogger(__name__)
 # then raises LoginError.  Keep this narrowly guarded so a future PyPtt parser
 # update is left untouched.
 _STALE_MAIN_MENU_TARGET = ["離開，再見", "人, 我是", "[呼叫器]"]
-_CURRENT_MAIN_MENU_TARGET = ["離開，再見", "人,我是", "呼叫器"]
+# Keep only text shared by both of PTT's status-line layouts.  In particular,
+# the compact layout has ``人,我是`` while the full layout has ``人, 我是``;
+# matching ``人,我是`` therefore still rejects valid main-menu screens.
+_CURRENT_MAIN_MENU_TARGET = ["離開，再見", "我是", "呼叫器"]
 
 
 def _patch_pyptt_main_menu_target() -> None:
