@@ -7,6 +7,8 @@ from ptt.ptt import (
     PttCheckin,
     _CURRENT_MAIN_MENU_TARGET,
     _STALE_MAIN_MENU_TARGET,
+    _SYNC_OUTPUT_MARKERS,
+    _strip_synchronized_output_markers,
 )
 
 
@@ -61,6 +63,36 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
         self.assertEqual(upstream_target, screens.Target.MainMenu)
         self.assertEqual(upstream_target + ["cursor"], screens.Target.CursorToGoodbye)
         api.assert_called_once_with()
+
+    @patch("ptt.ptt.PTT.API")
+    def test_login_can_remove_a_stale_server_session(self, api):
+        client = PttCheckin("user", "password")
+
+        self.assertTrue(client.login(kick_other_session=True))
+
+        api.return_value.login.assert_called_once_with(
+            "user", "password", kick_other_session=True
+        )
+
+    @patch("ptt.ptt.PTT.API")
+    def test_failed_login_closes_the_connection(self, api):
+        api.return_value.login.side_effect = RuntimeError("login failed")
+        client = PttCheckin("user", "password")
+
+        self.assertFalse(client.login())
+
+        api.return_value.connect_core.close.assert_called_once_with()
+
+    def test_synchronized_output_does_not_hide_continue_prompt(self):
+        animated_prompt = (
+            _SYNC_OUTPUT_MARKERS[0]
+            + "請按任意鍵繼續".encode()
+            + _SYNC_OUTPUT_MARKERS[1]
+        )
+        parser = screens.IncrementalScreen("utf-8")
+        parser.feed(_strip_synchronized_output_markers(animated_prompt))
+
+        self.assertIn("任意鍵", parser.screen)
 
 
 if __name__ == "__main__":

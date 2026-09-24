@@ -9,6 +9,13 @@ import argparse
 import logging
 import time
 
+from utils.virtualenv import activate_current_virtualenv
+
+# An absolute ``.venv/bin/python`` invocation doesn't export the shell
+# variables normally set by ``activate``.  Normalize them before importing
+# clients or launching any of their child processes.
+activate_current_virtualenv()
+
 from apktw.apktw import ApkTw
 from i18n import normalize_lang, t
 from ptt.ptt import PttCheckin
@@ -66,14 +73,17 @@ def run_apktw(config: str, lang: str | None, login_retries: int, retry_delay: fl
 
 def run_ptt(config: str, lang: str | None, login_retries: int, retry_delay: float) -> str:
     """Run the PTT check-in and return a status message for notification."""
-    client = PttCheckin.from_config(config)
-    if lang:
-        client.lang = normalize_lang(lang)
-
     try:
         logged_in = False
+        client = None
         for attempt in range(1, login_retries + 1):
-            if client.login():
+            # A failed PyPtt login can leave a partial WebSocket session.
+            # Retry with a fresh API and remove stale sessions after attempt 1.
+            client = PttCheckin.from_config(config)
+            if lang:
+                client.lang = normalize_lang(lang)
+
+            if client.login(kick_other_session=attempt > 1):
                 logged_in = True
                 break
             if attempt < login_retries:

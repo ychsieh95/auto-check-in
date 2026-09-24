@@ -99,6 +99,16 @@ python3 main.py --config config.json --type apktw
 python3 main.py --config config.json --type ptt
 ```
 
+You can also invoke the virtualenv interpreter directly without first sourcing
+its activation script. `main.py` initializes the equivalent non-interactive
+environment automatically:
+
+```bash
+$HOME/Programmings/auto-check-in/.venv/bin/python3 \
+  $HOME/Programmings/auto-check-in/main.py \
+  --config $HOME/Programmings/auto-check-in/config.json
+```
+
 ### Scheduling
 
 Run it once a day with cron, e.g.:

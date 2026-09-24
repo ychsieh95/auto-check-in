@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 from i18n import normalize_lang, t
-from PyPtt import PTT, screens
+from PyPtt import PTT, connect_core, screens
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +23,34 @@ _STALE_MAIN_MENU_TARGET = ["離開，再見", "人, 我是", "[呼叫器]"]
 # the compact layout has ``人,我是`` while the full layout has ``人, 我是``;
 # matching ``人,我是`` therefore still rejects valid main-menu screens.
 _CURRENT_MAIN_MENU_TARGET = ["離開，再見", "我是", "呼叫器"]
+_SYNC_OUTPUT_MARKERS = (b"\x1b[?2026h", b"\x1b[?2026l")
+_ORIGINAL_STREAM_SCREEN = connect_core.API._stream_screen
+
+
+def _strip_synchronized_output_markers(data_chunk: bytes | str) -> bytes | str:
+    for marker in _SYNC_OUTPUT_MARKERS:
+        if isinstance(data_chunk, str):
+            marker = marker.decode("ascii")
+        data_chunk = data_chunk.replace(marker, b"" if isinstance(data_chunk, bytes) else "")
+    return data_chunk
+
+
+def _patch_pyptt_synchronized_output() -> None:
+    """Keep PyPtt from freezing on PTT's synchronized-output control mode."""
+    probe = screens.IncrementalScreen("utf-8")
+    probe.feed(_SYNC_OUTPUT_MARKERS[0] + b"probe" + _SYNC_OUTPUT_MARKERS[1])
+    if "probe" in probe.screen:
+        return
+    if getattr(connect_core.API._stream_screen, "_ptt_sync_compatible", False):
+        return
+
+    def compatible_stream_screen(self, encoding, data_chunk):
+        return _ORIGINAL_STREAM_SCREEN(
+            self, encoding, _strip_synchronized_output_markers(data_chunk)
+        )
+
+    compatible_stream_screen._ptt_sync_compatible = True
+    connect_core.API._stream_screen = compatible_stream_screen
 
 
 def _patch_pyptt_main_menu_target() -> None:
@@ -50,6 +78,7 @@ class PttCheckin:
         self.password = password
         self.lang = normalize_lang(lang)
         _patch_pyptt_main_menu_target()
+        _patch_pyptt_synchronized_output()
         self.bot = PTT.API()
 
     @classmethod
@@ -69,15 +98,28 @@ class PttCheckin:
         """Translate a message key into the configured output language."""
         return t(self.lang, key, *args)
 
-    def login(self) -> bool:
+    def login(self, *, kick_other_session: bool = False) -> bool:
         """Log into PTT. Returns True on success."""
         try:
-            self.bot.login(self.username, self.password)
+            self.bot.login(
+                self.username,
+                self.password,
+                kick_other_session=kick_other_session,
+            )
         except Exception as exc:
             log.warning(self._("ptt_login_failed", exc))
+            self.close()
             return False
         log.info(self._("ptt_login_success", self.username))
         return True
+
+    def close(self) -> None:
+        """Close a failed PyPtt connection before another login attempt."""
+        try:
+            self.bot.connect_core.close()
+        except Exception:
+            # A failure can occur before PyPtt creates its socket.
+            log.debug("PTT connection was already closed", exc_info=True)
 
     def check_status(self) -> str:
         """Return a status message about the account's registration state."""
