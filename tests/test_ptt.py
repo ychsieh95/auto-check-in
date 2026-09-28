@@ -4,6 +4,7 @@ from unittest.mock import patch
 from PyPtt import screens
 
 from ptt.ptt import (
+    _CURSOR_POSITION_QUERY,
     PttCheckin,
     _CURRENT_MAIN_MENU_TARGET,
     _STALE_MAIN_MENU_TARGET,
@@ -91,6 +92,17 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
         )
         parser = screens.IncrementalScreen("utf-8")
         parser.feed(_strip_synchronized_output_markers(animated_prompt))
+
+        self.assertIn("任意鍵", parser.screen)
+
+    def test_cursor_position_query_does_not_freeze_welcome_screen(self):
+        welcome_screen = (
+            b"PTT welcome"
+            + _CURSOR_POSITION_QUERY
+            + "請按任意鍵繼續".encode()
+        )
+        parser = screens.IncrementalScreen("utf-8")
+        parser.feed(_strip_synchronized_output_markers(welcome_screen))
 
         self.assertIn("任意鍵", parser.screen)
 

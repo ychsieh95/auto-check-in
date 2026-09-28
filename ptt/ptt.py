@@ -24,11 +24,17 @@ _STALE_MAIN_MENU_TARGET = ["離開，再見", "人, 我是", "[呼叫器]"]
 # matching ``人,我是`` therefore still rejects valid main-menu screens.
 _CURRENT_MAIN_MENU_TARGET = ["離開，再見", "我是", "呼叫器"]
 _SYNC_OUTPUT_MARKERS = (b"\x1b[?2026h", b"\x1b[?2026l")
+_CURSOR_POSITION_QUERY = b"\x1b[6n"
+_UNSUPPORTED_TERMINAL_SEQUENCES = _SYNC_OUTPUT_MARKERS + (_CURSOR_POSITION_QUERY,)
 _ORIGINAL_STREAM_SCREEN = connect_core.API._stream_screen
 
 
 def _strip_synchronized_output_markers(data_chunk: bytes | str) -> bytes | str:
-    for marker in _SYNC_OUTPUT_MARKERS:
+    # PyPtt 2.3.6 permanently stops its incremental parser when it encounters
+    # an unknown complete escape. PTT's welcome screen uses synchronized
+    # output and, since September 2026, a cursor-position query (CSI 6 n).
+    # Neither sequence changes the text used by PyPtt's screen matcher.
+    for marker in _UNSUPPORTED_TERMINAL_SEQUENCES:
         if isinstance(data_chunk, str):
             marker = marker.decode("ascii")
         data_chunk = data_chunk.replace(marker, b"" if isinstance(data_chunk, bytes) else "")
@@ -38,7 +44,12 @@ def _strip_synchronized_output_markers(data_chunk: bytes | str) -> bytes | str:
 def _patch_pyptt_synchronized_output() -> None:
     """Keep PyPtt from freezing on PTT's synchronized-output control mode."""
     probe = screens.IncrementalScreen("utf-8")
-    probe.feed(_SYNC_OUTPUT_MARKERS[0] + b"probe" + _SYNC_OUTPUT_MARKERS[1])
+    probe.feed(
+        _SYNC_OUTPUT_MARKERS[0]
+        + _CURSOR_POSITION_QUERY
+        + b"probe"
+        + _SYNC_OUTPUT_MARKERS[1]
+    )
     if "probe" in probe.screen:
         return
     if getattr(connect_core.API._stream_screen, "_ptt_sync_compatible", False):
