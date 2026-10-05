@@ -19,13 +19,16 @@ log = logging.getLogger(__name__)
 # then raises LoginError.  Keep this narrowly guarded so a future PyPtt parser
 # update is left untouched.
 _STALE_MAIN_MENU_TARGET = ["離開，再見", "人, 我是", "[呼叫器]"]
-# Keep only text shared by both of PTT's status-line layouts.  In particular,
-# the compact layout has ``人,我是`` while the full layout has ``人, 我是``;
-# matching ``人,我是`` therefore still rejects valid main-menu screens.
-_CURRENT_MAIN_MENU_TARGET = ["離開，再見", "我是", "呼叫器"]
+# The October 2026 status bar no longer includes "我是" or "呼叫器".
+# Match the menu title and its goodbye entry instead of changing status text.
+_PREVIOUS_MAIN_MENU_TARGET = ["離開，再見", "我是", "呼叫器"]
+_CURRENT_MAIN_MENU_TARGET = ["【主功能表】", "離開，再見"]
 _SYNC_OUTPUT_MARKERS = (b"\x1b[?2026h", b"\x1b[?2026l")
 _CURSOR_POSITION_QUERY = b"\x1b[6n"
-_UNSUPPORTED_TERMINAL_SEQUENCES = _SYNC_OUTPUT_MARKERS + (_CURSOR_POSITION_QUERY,)
+_AUTOWRAP_MARKERS = (b"\x1b[?7h", b"\x1b[?7l")
+_UNSUPPORTED_TERMINAL_SEQUENCES = (
+    _SYNC_OUTPUT_MARKERS + (_CURSOR_POSITION_QUERY,) + _AUTOWRAP_MARKERS
+)
 _ORIGINAL_STREAM_SCREEN = connect_core.API._stream_screen
 
 
@@ -33,7 +36,9 @@ def _strip_synchronized_output_markers(data_chunk: bytes | str) -> bytes | str:
     # PyPtt 2.3.6 permanently stops its incremental parser when it encounters
     # an unknown complete escape. PTT's welcome screen uses synchronized
     # output and, since September 2026, a cursor-position query (CSI 6 n).
-    # Neither sequence changes the text used by PyPtt's screen matcher.
+    # PTT also disables autowrap (CSI ? 7 l) after accepting the password.
+    # Its screens use explicit cursor positioning, so these mode switches
+    # can be ignored for the text used by PyPtt's screen matcher.
     for marker in _UNSUPPORTED_TERMINAL_SEQUENCES:
         if isinstance(data_chunk, str):
             marker = marker.decode("ascii")
@@ -47,7 +52,9 @@ def _patch_pyptt_synchronized_output() -> None:
     probe.feed(
         _SYNC_OUTPUT_MARKERS[0]
         + _CURSOR_POSITION_QUERY
+        + _AUTOWRAP_MARKERS[1]
         + b"probe"
+        + _AUTOWRAP_MARKERS[0]
         + _SYNC_OUTPUT_MARKERS[1]
     )
     if "probe" in probe.screen:
@@ -56,8 +63,29 @@ def _patch_pyptt_synchronized_output() -> None:
         return
 
     def compatible_stream_screen(self, encoding, data_chunk):
+        # WebSocket frames can split an escape anywhere. Hold only a suffix
+        # that could become one of the unsupported sequences on the next call.
+        pending = getattr(self, "_ptt_control_pending", None)
+        if pending is None:
+            pending = self._ptt_control_pending = {}
+        if encoding not in self._stream_parsers:
+            pending.pop(encoding, None)
+        empty = b"" if isinstance(data_chunk, bytes) else ""
+        data_chunk = pending.get(encoding, empty) + data_chunk
+        data_chunk = _strip_synchronized_output_markers(data_chunk)
+        markers = _UNSUPPORTED_TERMINAL_SEQUENCES
+        if isinstance(data_chunk, str):
+            markers = tuple(marker.decode("ascii") for marker in markers)
+        hold = 0
+        for marker in markers:
+            for length in range(1, len(marker)):
+                if data_chunk.endswith(marker[:length]):
+                    hold = max(hold, length)
+        pending[encoding] = data_chunk[-hold:] if hold else empty
+        if hold:
+            data_chunk = data_chunk[:-hold]
         return _ORIGINAL_STREAM_SCREEN(
-            self, encoding, _strip_synchronized_output_markers(data_chunk)
+            self, encoding, data_chunk
         )
 
     compatible_stream_screen._ptt_sync_compatible = True
@@ -66,15 +94,16 @@ def _patch_pyptt_synchronized_output() -> None:
 
 def _patch_pyptt_main_menu_target() -> None:
     """Teach affected PyPtt releases to recognize PTT's current main menu."""
-    if screens.Target.MainMenu != _STALE_MAIN_MENU_TARGET:
+    old_target = screens.Target.MainMenu
+    if old_target not in (_STALE_MAIN_MENU_TARGET, _PREVIOUS_MAIN_MENU_TARGET):
         return
 
     screens.Target.MainMenu = _CURRENT_MAIN_MENU_TARGET.copy()
 
     # CursorToGoodbye is copied from MainMenu when PyPtt is imported.  Preserve
     # any cursor marker already appended by PyPtt while updating that prefix.
-    prefix_length = len(_STALE_MAIN_MENU_TARGET)
-    if screens.Target.CursorToGoodbye[:prefix_length] == _STALE_MAIN_MENU_TARGET:
+    prefix_length = len(old_target)
+    if screens.Target.CursorToGoodbye[:prefix_length] == old_target:
         screens.Target.CursorToGoodbye = (
             _CURRENT_MAIN_MENU_TARGET.copy()
             + screens.Target.CursorToGoodbye[prefix_length:]

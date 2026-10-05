@@ -1,10 +1,14 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from PyPtt import screens
+from PyPtt import connect_core, screens
 
 from ptt.ptt import (
     _CURSOR_POSITION_QUERY,
+    _AUTOWRAP_MARKERS,
+    _UNSUPPORTED_TERMINAL_SEQUENCES,
+    _patch_pyptt_synchronized_output,
     PttCheckin,
     _CURRENT_MAIN_MENU_TARGET,
     _STALE_MAIN_MENU_TARGET,
@@ -36,7 +40,7 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
         )
         api.assert_called_once_with()
 
-    def test_current_markers_match_both_ptt_status_line_layouts(self):
+    def test_current_markers_match_old_and_current_ptt_status_lines(self):
         full_status_line = (
             "[5/23 星期六 16:40] [ 射手時 ]  "
             "線上27866人, 我是CodingMan   [呼叫器]打開"
@@ -45,13 +49,20 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
             "8/19週三22:35   [ 七夕 ]   "
             "線上30721人,我是DeepLearning 呼叫器關閉  (h)說明"
         )
+        current_status_line = "主選單 [ 牡羊時 ] 10/6 週二 0:40 | user | 線上22394人 (h)說明"
 
-        for status_line in (full_status_line, compact_status_line):
+        for status_line in (full_status_line, compact_status_line, current_status_line):
             with self.subTest(status_line=status_line):
-                main_menu_screen = f"離開，再見\n{status_line}"
+                main_menu_screen = f"【主功能表】\n離開，再見\n{status_line}"
                 self.assertTrue(
                     all(marker in main_menu_screen for marker in _CURRENT_MAIN_MENU_TARGET)
                 )
+
+    def test_welcome_prompt_is_not_recognized_as_main_menu(self):
+        welcome_screen = "密碼正確！歡迎光臨\n請按任意鍵繼續"
+        self.assertFalse(
+            all(marker in welcome_screen for marker in _CURRENT_MAIN_MENU_TARGET)
+        )
 
     @patch("ptt.ptt.PTT.API")
     def test_client_does_not_override_a_future_upstream_parser(self, api):
@@ -105,6 +116,31 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
         parser.feed(_strip_synchronized_output_markers(welcome_screen))
 
         self.assertIn("任意鍵", parser.screen)
+
+    def test_autowrap_switch_does_not_hide_post_password_prompt(self):
+        parser = screens.IncrementalScreen("utf-8")
+        parser.feed(_strip_synchronized_output_markers(
+            _AUTOWRAP_MARKERS[1]
+            + "請按任意鍵繼續".encode()
+            + _AUTOWRAP_MARKERS[0]
+        ))
+
+        self.assertIn("任意鍵", parser.screen)
+
+    def test_control_sequences_split_across_frames_do_not_freeze_parser(self):
+        _patch_pyptt_synchronized_output()
+        for marker in _UNSUPPORTED_TERMINAL_SEQUENCES:
+            for split in range(1, len(marker)):
+                with self.subTest(marker=marker, split=split):
+                    core = SimpleNamespace(
+                        _stream_parsers={}, config=SimpleNamespace(screen_height=24)
+                    )
+                    connect_core.API._stream_screen(core, "utf-8", b"before" + marker[:split])
+                    screen = connect_core.API._stream_screen(
+                        core, "utf-8", marker[split:] + "請按任意鍵繼續".encode()
+                    )
+                    self.assertIn("before", screen)
+                    self.assertIn("任意鍵", screen)
 
 
 if __name__ == "__main__":
