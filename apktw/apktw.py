@@ -11,6 +11,8 @@ import pickle
 import re
 import requests
 import time
+from html import unescape
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from i18n import normalize_lang, t
@@ -105,30 +107,80 @@ class ApkTw:
         match = re.search(r"updateseccode\('([^']+)'", html)
         return match.group(1) if match else None
 
-    def fetch_captcha_image(self, idhash: str) -> bytes:
+    def fetch_seccode_challenge(self, idhash: str) -> str:
+        """Initialize the challenge, as Discuz's updateseccode JavaScript does."""
+        resp = self.session.get(
+            f"{self.BASE_URL}/misc.php",
+            params={
+                "mod": "seccode", "action": "update", "idhash": idhash,
+                "modid": self.SECCODE_MODID, "inajax": "1",
+                "ajaxtarget": f"seccode_{idhash}",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        # The response embeds HTML/JavaScript in quoted JavaScript strings.
+        return re.sub(r"\\+(['\"])", r"\1", resp.text)
+
+    @staticmethod
+    def extract_turnstile_sitekey(html: str) -> str | None:
+        html = re.sub(r"\\+(['\"])", r"\1", html)
+        if "turnstile" not in html.lower():
+            return None
+        tag = BeautifulSoup(html, "html.parser").find(attrs={"data-sitekey": True})
+        if tag:
+            return tag["data-sitekey"]
+        match = re.search(r"\bsitekey\s*:\s*['\"]([^'\"]+)['\"]", html)
+        if match:
+            return match.group(1)
+        raise RuntimeError("Turnstile challenge found but its sitekey is missing.")
+
+    def fetch_captcha_image(self, idhash: str, challenge_html: str | None = None) -> bytes:
         """Download the CAPTCHA image for the given seccode idhash."""
+        if challenge_html is None:
+            challenge_html = self.fetch_seccode_challenge(idhash)
+        if self.extract_turnstile_sitekey(challenge_html):
+            raise RuntimeError("apk.tw uses Turnstile, not an image CAPTCHA; no image is available.")
         img_url = f"{self.BASE_URL}/misc.php?mod=seccode&update={int(time.time() * 1000)}&idhash={idhash}"
+        for src in re.findall(r'''<img\b[^>]*\bsrc=["']([^"']+)["']''', challenge_html, re.I):
+            if "mod=seccode" in unescape(src):
+                img_url = urljoin(self.BASE_URL + "/", unescape(src))
+                break
         resp = self.session.get(img_url, timeout=15)
         resp.raise_for_status()
+        self._validate_captcha_image(resp.content)
         return resp.content
+
+    @staticmethod
+    def _validate_captcha_image(image_bytes: bytes) -> None:
+        if not image_bytes or not image_bytes.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM")):
+            raise RuntimeError("CAPTCHA download is empty or not a supported image (PNG, JPEG, GIF, BMP).")
 
     def solve_captcha(self, image_bytes: bytes) -> str:
         """Solve a CAPTCHA image via 2captcha and return the recognized text."""
+        self._validate_captcha_image(image_bytes)
+        return self._solve_2captcha({
+            "method": "base64",
+            "body": base64.b64encode(image_bytes).decode("ascii"),
+            "regsense": "1",  # case-sensitive
+            "min_len": "4",
+            "max_len": "4",
+        })
+
+    def solve_turnstile(self, sitekey: str) -> str:
+        """Return a Turnstile token for the apk.tw login page."""
+        return self._solve_2captcha({
+            "method": "turnstile", "sitekey": sitekey, "pageurl": self.LOGIN_URL,
+        })
+
+    def _solve_2captcha(self, task: dict[str, str]) -> str:
+        """Submit an image or token task and poll for its result."""
         if not self.captcha_key:
             raise RuntimeError("Login requires a CAPTCHA but no 2captcha_key is configured.")
 
-        b64 = base64.b64encode(image_bytes).decode("ascii")
         resp = requests.post(
             self.TWOCAPTCHA_SUBMIT_URL,
-            data={
-                "key": self.captcha_key,
-                "method": "base64",
-                "body": b64,
-                "json": "1",
-                "regsense": "1",  # case-sensitive
-                "min_len": "4",
-                "max_len": "4",
-            },
+            data={"key": self.captcha_key, "json": "1", **task},
             timeout=30,
         )
         resp.raise_for_status()
@@ -175,14 +227,23 @@ class ApkTw:
             idhash = self.extract_seccode_idhash(html)
             if idhash:
                 log.info(self._("captcha_detected", idhash))
-                image_bytes = self.fetch_captcha_image(idhash)
-                captcha_text = self.solve_captcha(image_bytes)
-                log.info(self._("captcha_solved", captcha_text))
                 payload.update({
                     "seccodehash": idhash,
                     "seccodemodid": self.SECCODE_MODID,
-                    "seccodeverify": captcha_text,
+                    "seccodeverify": "",
                 })
+                challenge = self.fetch_seccode_challenge(idhash)
+                sitekey = self.extract_turnstile_sitekey(challenge)
+            else:
+                sitekey = self.extract_turnstile_sitekey(html)
+
+            if sitekey:
+                payload["cf-turnstile-response"] = self.solve_turnstile(sitekey)
+            elif idhash:
+                image_bytes = self.fetch_captcha_image(idhash, challenge)
+                captcha_text = self.solve_captcha(image_bytes)
+                log.info(self._("captcha_solved", captcha_text))
+                payload["seccodeverify"] = captcha_text
 
             log.info(self._("submitting_login", self.username, attempt, self.MAX_LOGIN_ATTEMPTS))
             resp = self.session.post(self.LOGIN_POST_URL, data=payload, timeout=15)

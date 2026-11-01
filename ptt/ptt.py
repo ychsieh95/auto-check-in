@@ -26,8 +26,14 @@ _CURRENT_MAIN_MENU_TARGET = ["【主功能表】", "離開，再見"]
 _SYNC_OUTPUT_MARKERS = (b"\x1b[?2026h", b"\x1b[?2026l")
 _CURSOR_POSITION_QUERY = b"\x1b[6n"
 _AUTOWRAP_MARKERS = (b"\x1b[?7h", b"\x1b[?7l")
+_MOUSE_TRACKING_MARKERS = tuple(
+    f"\x1b[?{mode}{state}".encode("ascii")
+    for mode in (1000, 1002, 1003, 1006)
+    for state in ("h", "l")
+)
 _UNSUPPORTED_TERMINAL_SEQUENCES = (
     _SYNC_OUTPUT_MARKERS + (_CURSOR_POSITION_QUERY,) + _AUTOWRAP_MARKERS
+    + _MOUSE_TRACKING_MARKERS
 )
 _ORIGINAL_STREAM_SCREEN = connect_core.API._stream_screen
 
@@ -39,6 +45,8 @@ def _strip_synchronized_output_markers(data_chunk: bytes | str) -> bytes | str:
     # PTT also disables autowrap (CSI ? 7 l) after accepting the password.
     # Its screens use explicit cursor positioning, so these mode switches
     # can be ignored for the text used by PyPtt's screen matcher.
+    # PTT also resets mouse tracking (1000/1002/1003/1006) before login.
+    # Mouse event modes have no effect on the rendered text.
     for marker in _UNSUPPORTED_TERMINAL_SEQUENCES:
         if isinstance(data_chunk, str):
             marker = marker.decode("ascii")
@@ -47,15 +55,10 @@ def _strip_synchronized_output_markers(data_chunk: bytes | str) -> bytes | str:
 
 
 def _patch_pyptt_synchronized_output() -> None:
-    """Keep PyPtt from freezing on PTT's synchronized-output control mode."""
+    """Keep PyPtt from freezing on PTT's terminal mode controls."""
     probe = screens.IncrementalScreen("utf-8")
     probe.feed(
-        _SYNC_OUTPUT_MARKERS[0]
-        + _CURSOR_POSITION_QUERY
-        + _AUTOWRAP_MARKERS[1]
-        + b"probe"
-        + _AUTOWRAP_MARKERS[0]
-        + _SYNC_OUTPUT_MARKERS[1]
+        b"".join(_UNSUPPORTED_TERMINAL_SEQUENCES) + b"probe"
     )
     if "probe" in probe.screen:
         return

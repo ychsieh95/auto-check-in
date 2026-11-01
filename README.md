@@ -27,7 +27,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Copy the example config and fill in your credentials:
+Copy the example configuration. Enter your credentials:
 
 ```bash
 cp config.example.json config.json

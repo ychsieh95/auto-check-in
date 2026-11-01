@@ -7,6 +7,7 @@ from PyPtt import connect_core, screens
 from ptt.ptt import (
     _CURSOR_POSITION_QUERY,
     _AUTOWRAP_MARKERS,
+    _MOUSE_TRACKING_MARKERS,
     _UNSUPPORTED_TERMINAL_SEQUENCES,
     _patch_pyptt_synchronized_output,
     PttCheckin,
@@ -141,6 +142,32 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
                     )
                     self.assertIn("before", screen)
                     self.assertIn("任意鍵", screen)
+
+    def test_mouse_reset_before_login_does_not_freeze_later_frames(self):
+        _patch_pyptt_synchronized_output()
+        core = SimpleNamespace(
+            _stream_parsers={}, config=SimpleNamespace(screen_height=24)
+        )
+        reset = b"".join(marker for marker in _MOUSE_TRACKING_MARKERS if marker.endswith(b"l"))
+        connect_core.API._stream_screen(core, "utf-8", reset)
+        screen = connect_core.API._stream_screen(
+            core, "utf-8", "請輸入代號，或以 guest 參觀".encode()
+        )
+
+        self.assertIn("請輸入代號", screen)
+        self.assertFalse(core._stream_parsers["utf-8"]._bailed)
+
+    def test_mouse_controls_in_text_frames_preserve_cursor_positioning(self):
+        _patch_pyptt_synchronized_output()
+        core = SimpleNamespace(
+            _stream_parsers={}, config=SimpleNamespace(screen_height=24)
+        )
+        connect_core.API._stream_screen(core, "utf-8", "\x1b[?100")
+        screen = connect_core.API._stream_screen(
+            core, "utf-8", "6l\x1b[2;3H請按任意鍵繼續"
+        )
+
+        self.assertEqual("  請按任意鍵繼續", screen.splitlines()[1])
 
 
 if __name__ == "__main__":
