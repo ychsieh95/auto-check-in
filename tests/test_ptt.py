@@ -6,6 +6,7 @@ from PyPtt import connect_core, screens
 
 from ptt.ptt import (
     _CURSOR_POSITION_QUERY,
+    _PTT_WEBSOCKET_HOST,
     _AUTOWRAP_MARKERS,
     _MOUSE_TRACKING_MARKERS,
     _UNSUPPORTED_TERMINAL_SEQUENCES,
@@ -39,7 +40,7 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
             _CURRENT_MAIN_MENU_TARGET + ["> (G)oodbye"],
             screens.Target.CursorToGoodbye,
         )
-        api.assert_called_once_with()
+        api.assert_called_once_with(host=_PTT_WEBSOCKET_HOST)
 
     def test_current_markers_match_old_and_current_ptt_status_lines(self):
         full_status_line = (
@@ -75,7 +76,7 @@ class PttMainMenuCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(upstream_target, screens.Target.MainMenu)
         self.assertEqual(upstream_target + ["cursor"], screens.Target.CursorToGoodbye)
-        api.assert_called_once_with()
+        api.assert_called_once_with(host=_PTT_WEBSOCKET_HOST)
 
     @patch("ptt.ptt.PTT.API")
     def test_login_can_remove_a_stale_server_session(self, api):

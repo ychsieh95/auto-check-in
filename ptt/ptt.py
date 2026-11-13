@@ -13,6 +13,10 @@ from PyPtt import PTT, connect_core, screens
 
 log = logging.getLogger(__name__)
 
+# PTT's WebSocket route is slash-sensitive: /bbs/ returns HTTP 404.
+# Use PyPtt's custom host option to match https://term.ptt.cc's /bbs URL.
+_PTT_WEBSOCKET_HOST = "ws.ptt.cc/bbs"
+
 
 # PTT changed the status line on its main menu in August 2026.  PyPtt 2.3.6
 # still looks for the old spacing/brackets, so it reaches the main menu and
@@ -122,7 +126,7 @@ class PttCheckin:
         self.lang = normalize_lang(lang)
         _patch_pyptt_main_menu_target()
         _patch_pyptt_synchronized_output()
-        self.bot = PTT.API()
+        self.bot = PTT.API(host=_PTT_WEBSOCKET_HOST)
 
     @classmethod
     def from_config(cls, path: str | Path) -> "PttCheckin":
